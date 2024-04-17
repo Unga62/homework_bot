@@ -8,11 +8,14 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
+from exceptions import ApiError, EmptyApiResponse, TokenError
+
 load_dotenv()
 
 LEN_LIST = 0
 
 STATUS = 'Новые статусы не поступили'
+TOKEN_ERROR = 'Отсутствует обязательная переменная окружения'
 
 PRACTICUM_TOKEN = os.getenv('YA_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TOKEN')
@@ -30,21 +33,21 @@ HOMEWORK_VERDICTS = {
 }
 
 
-class ApiError(Exception):
-    """Обработка исключений для запроса к эндпоинту."""
-
-
-class EmptyApiResponse(ApiError):
-    """Обработка исключений пустого ответа от API."""
-
-
-class TokenError(Exception):
-    """Обработка исключений ошибки в токенах."""
-
-
 def check_tokens():
     """Проверяет работоспособность переменных окружения."""
-    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
+    ALL_TOKEN = {
+        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID
+    }
+    crash_token = []
+    for name, value in ALL_TOKEN.items():
+        if value is None:
+            logging.critical(f'Ошибка в токене {name}')
+            crash_token.append(name)
+    if len(crash_token) > LEN_LIST:
+        return False
+    return True
 
 
 def send_message(bot, message):
@@ -69,7 +72,7 @@ def get_api_answer(timestamp):
         raise ApiError(f'Ошибка {error}')
     if response.status_code == HTTPStatus.OK:
         return response.json()
-    raise ApiError(f'Сбой в работе программы: '
+    raise ApiError('Сбой в работе программы: '
                    f'Эндпоинт [{ENDPOINT}] недоступен. '
                    f'Код ответа API: {response.status_code}')
 
@@ -91,22 +94,22 @@ def parse_status(homework):
     try:
         homework_name = homework['homework_name']
     except KeyError:
-        raise EmptyApiResponse('Ключ "homework_name" не содержит элементов')
+        raise EmptyApiResponse('Ключ "homework_name" отсутствует')
     if 'status' not in homework:
-        raise EmptyApiResponse('Ключ "status" не содержит элементов')
+        raise EmptyApiResponse('Ключ "status" отсутствует')
     status = homework['status']
     try:
         verdict = HOMEWORK_VERDICTS[status]
     except KeyError:
-        raise EmptyApiResponse('Неожиданный ключ'
-                               'для словаря HOMEWORK_VERDICTS', {status})
+        raise EmptyApiResponse(f'Ключ {status} отсутствует'
+                               'в словаре HOMEWORK_VERDICTS')
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
-        raise logging.critical('Отсутствует обязательная переменная окружения')
+        raise TokenError(TOKEN_ERROR)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = 0
     old_status = ''
@@ -126,8 +129,9 @@ def main():
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
-            send_message(bot, message)
-            new_status = error
+            if old_status != message:
+                send_message(bot, message)
+                new_status = error
         finally:
             old_status = new_status
             time.sleep(RETRY_PERIOD)
